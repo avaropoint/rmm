@@ -86,10 +86,16 @@ lint:
 	fi
 	@go vet ./...
 
-# CI check: format + vet + build all (used by CI pipeline)
+# CI check: format + vet + golangci-lint + build all (used by CI pipeline)
 check:
 	@echo "Running checks..."
 	@$(MAKE) lint
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		echo "Running golangci-lint..."; \
+		golangci-lint run ./...; \
+	else \
+		echo "golangci-lint not installed, skipping (install: https://golangci-lint.run)"; \
+	fi
 	@go build ./...
 	@echo "All checks passed."
 
@@ -181,7 +187,7 @@ help:
 	@echo "  make stop         - Stop running processes"
 	@echo "  make install      - Install to /usr/local/bin"
 	@echo "  make lint         - Check formatting + vet"
-	@echo "  make check        - Full CI check (lint + build)"
+	@echo "  make check        - Full CI check (lint + golangci-lint + build)"
 	@echo "  make clean        - Remove all build artifacts"
 	@echo ""
 	@echo "Supported platforms:"

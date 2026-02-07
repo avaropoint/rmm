@@ -38,7 +38,7 @@ func (a *Agent) run() error {
 	if err != nil {
 		return err
 	}
-	defer a.conn.Close()
+	defer a.conn.Close() //nolint:errcheck
 
 	log.Println("Connected to server")
 
@@ -71,7 +71,7 @@ func (a *Agent) run() error {
 			case <-done:
 				return
 			case <-ticker.C:
-				a.sendMessage(protocol.Message{Type: "heartbeat"})
+				_ = a.sendMessage(protocol.Message{Type: "heartbeat"})
 			}
 		}
 	}()
@@ -87,7 +87,7 @@ func (a *Agent) run() error {
 		case protocol.OpClose:
 			return nil
 		case protocol.OpPing:
-			protocol.WriteClientFrame(a.conn, protocol.OpPong, data)
+			_ = protocol.WriteClientFrame(a.conn, protocol.OpPong, data)
 		case protocol.OpText:
 			var msg protocol.Message
 			if err := json.Unmarshal(data, &msg); err != nil {
@@ -165,19 +165,19 @@ func dialWebSocket(serverURL string) (net.Conn, *bufio.Reader, error) {
 		path, host, key)
 
 	if _, err := conn.Write([]byte(request)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, err
 	}
 
 	reader := bufio.NewReader(conn)
 	statusLine, err := reader.ReadString('\n')
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, err
 	}
 
 	if len(statusLine) < 12 || statusLine[9:12] != "101" {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, fmt.Errorf("websocket handshake failed: %s", statusLine)
 	}
 
@@ -185,7 +185,7 @@ func dialWebSocket(serverURL string) (net.Conn, *bufio.Reader, error) {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, nil, err
 		}
 		if line == "\r\n" {

@@ -94,7 +94,7 @@ func upgradeWebSocket(w http.ResponseWriter, r *http.Request) (net.Conn, error) 
 		"Sec-WebSocket-Accept: " + acceptKey + "\r\n\r\n"
 
 	if _, err := conn.Write([]byte(response)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
@@ -120,22 +120,22 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	reader := bufio.NewReader(conn)
 
 	// Read registration message.
-	conn.SetReadDeadline(time.Now().Add(registrationTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(registrationTimeout))
 	opcode, data, err := protocol.ReadFrame(reader)
 	if err != nil || opcode != protocol.OpText {
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
 	var msg protocol.Message
 	if err := json.Unmarshal(data, &msg); err != nil || msg.Type != "register" {
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
 	var reg protocol.Registration
 	if err := json.Unmarshal(msg.Payload, &reg); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
@@ -179,14 +179,14 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		Type:    "registered",
 		Payload: respPayload,
 	})
-	protocol.WriteServerFrame(conn, protocol.OpText, resp)
-	conn.SetReadDeadline(time.Time{})
+	_ = protocol.WriteServerFrame(conn, protocol.OpText, resp)
+	_ = conn.SetReadDeadline(time.Time{})
 
 	defer func() {
 		s.mu.Lock()
 		delete(s.agents, agent.ID)
 		s.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 		log.Printf("Agent disconnected: %s", agent.Name)
 	}()
 
@@ -203,7 +203,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		case protocol.OpClose:
 			return
 		case protocol.OpPing:
-			protocol.WriteServerFrame(conn, protocol.OpPong, data)
+			_ = protocol.WriteServerFrame(conn, protocol.OpPong, data)
 			continue
 		case protocol.OpText:
 			var m protocol.Message
@@ -215,7 +215,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 			case "screen", "display_switched":
 				s.mu.RLock()
 				if vc, ok := s.viewers[agent.ID]; ok {
-					protocol.WriteServerFrame(vc, protocol.OpText, data)
+					_ = protocol.WriteServerFrame(vc, protocol.OpText, data)
 				}
 				s.mu.RUnlock()
 			case "heartbeat":
@@ -258,7 +258,7 @@ func (s *Server) handleViewer(w http.ResponseWriter, r *http.Request) {
 
 	agent.mu.Lock()
 	startMsg, _ := json.Marshal(protocol.Message{Type: "start_capture"})
-	protocol.WriteServerFrame(agent.conn, protocol.OpText, startMsg)
+	_ = protocol.WriteServerFrame(agent.conn, protocol.OpText, startMsg)
 	agent.mu.Unlock()
 
 	defer func() {
@@ -268,10 +268,10 @@ func (s *Server) handleViewer(w http.ResponseWriter, r *http.Request) {
 
 		agent.mu.Lock()
 		stopMsg, _ := json.Marshal(protocol.Message{Type: "stop_capture"})
-		protocol.WriteServerFrame(agent.conn, protocol.OpText, stopMsg)
+		_ = protocol.WriteServerFrame(agent.conn, protocol.OpText, stopMsg)
 		agent.mu.Unlock()
 
-		conn.Close()
+		_ = conn.Close()
 		log.Printf("Viewer disconnected from agent: %s", agent.Name)
 	}()
 
@@ -295,7 +295,7 @@ func (s *Server) handleViewer(w http.ResponseWriter, r *http.Request) {
 			if m.Type == "input" || m.Type == "switch_display" {
 				log.Printf("Forwarding %s to agent %s", m.Type, agent.Name)
 				agent.mu.Lock()
-				protocol.WriteServerFrame(agent.conn, protocol.OpText, data)
+				_ = protocol.WriteServerFrame(agent.conn, protocol.OpText, data)
 				agent.mu.Unlock()
 			}
 		}

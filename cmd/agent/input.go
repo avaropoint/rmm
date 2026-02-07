@@ -24,9 +24,10 @@ func (a *Agent) handleInput(payload json.RawMessage) {
 		return
 	}
 
-	if input.Kind == "mouse" {
+	switch input.Kind {
+	case "mouse":
 		injectMouse(input.Action, input.X, input.Y, input.Button)
-	} else if input.Kind == "key" {
+	case "key":
 		injectKey(input.Action, input.Key, input.Code)
 	}
 }

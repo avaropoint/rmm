@@ -66,7 +66,7 @@ func (a *Agent) startCapture() {
 					"data": base64.StdEncoding.EncodeToString(data),
 				})
 
-				a.sendMessage(protocol.Message{
+				_ = a.sendMessage(protocol.Message{
 					Type:    "screen",
 					Payload: screenData,
 				})
@@ -113,7 +113,7 @@ func (a *Agent) handleSwitchDisplay(payload json.RawMessage) {
 		"display":       req.Display,
 		"display_count": displayCount,
 	})
-	a.sendMessage(protocol.Message{
+	_ = a.sendMessage(protocol.Message{
 		Type:    "display_switched",
 		Payload: respData,
 	})
@@ -163,7 +163,7 @@ func getDisplayCount() int {
 
 func captureScreenMacOS(display int) ([]byte, error) {
 	tmpFile := fmt.Sprintf("/tmp/screen_%d.jpg", time.Now().UnixNano())
-	defer os.Remove(tmpFile)
+	defer os.Remove(tmpFile) //nolint:errcheck
 
 	displayArg := fmt.Sprintf("%d", display)
 	cmd := exec.Command("screencapture", "-x", "-t", "jpg", "-C", "-D", displayArg, tmpFile)
@@ -180,7 +180,7 @@ func captureScreenMacOS(display int) ([]byte, error) {
 
 func captureScreenLinux() ([]byte, error) {
 	tmpFile := fmt.Sprintf("/tmp/screen_%d.jpg", time.Now().UnixNano())
-	defer os.Remove(tmpFile)
+	defer os.Remove(tmpFile) //nolint:errcheck
 
 	cmd := exec.Command("gnome-screenshot", "-f", tmpFile)
 	if err := cmd.Run(); err != nil {
@@ -202,7 +202,7 @@ func captureScreenLinux() ([]byte, error) {
 
 func captureScreenWindows() ([]byte, error) {
 	tmpFile := fmt.Sprintf("%s\\screen_%d.jpg", os.TempDir(), time.Now().UnixNano())
-	defer os.Remove(tmpFile)
+	defer os.Remove(tmpFile) //nolint:errcheck
 
 	script := fmt.Sprintf(`
 Add-Type -AssemblyName System.Windows.Forms
