@@ -2,8 +2,11 @@
 /bin/
 /release/
 
-# Runtime data (keys, certs, database)
+# Runtime data (keys, database)
 /data/
+
+# TLS certificates
+/certs/
 
 # OS junk
 .DS_Store

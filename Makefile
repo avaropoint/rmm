@@ -13,6 +13,7 @@ LDFLAGS     := -ldflags "-s -w -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION
 BIN_DIR     := bin
 RELEASE_DIR := release
 DATA_DIR    := data
+CERTS_DIR   := certs
 
 PLATFORMS := \
 	darwin/amd64 \
@@ -118,7 +119,7 @@ dev-tls: server agent
 	@./$(BIN_DIR)/agent
 
 dev-fresh: stop clean
-	@rm -rf $(DATA_DIR)
+	@rm -rf $(DATA_DIR) $(CERTS_DIR)
 	@echo "Cleaned all state. Build and start fresh:"
 	@echo "  make run-server"
 
@@ -152,9 +153,9 @@ stop:
 #
 #   brew install mkcert   (macOS)
 #   mkcert -install        (one-time: installs local CA)
-#   make dev-certs         (generates certs in data/)
+#   make dev-certs         (generates certs in certs/)
 #
-# Then: ./bin/server -cert data/local.crt -key data/local.key -web ./web
+# Then: ./bin/server -cert certs/local.crt -key certs/local.key -web ./web
 
 dev-certs:
 	@if ! command -v mkcert >/dev/null 2>&1; then \
@@ -163,12 +164,12 @@ dev-certs:
 		echo "  Linux:  https://github.com/FiloSottile/mkcert#installation"; \
 		exit 1; \
 	fi
-	@mkdir -p $(DATA_DIR)
-	mkcert -cert-file $(DATA_DIR)/local.crt -key-file $(DATA_DIR)/local.key \
+	@mkdir -p $(CERTS_DIR)
+	mkcert -cert-file $(CERTS_DIR)/local.crt -key-file $(CERTS_DIR)/local.key \
 		localhost 127.0.0.1 ::1 $$(hostname)
 	@echo ""
-	@echo "Certificates generated in $(DATA_DIR)/"
-	@echo "Run server with: ./$(BIN_DIR)/server -cert $(DATA_DIR)/local.crt -key $(DATA_DIR)/local.key -web ./web"
+	@echo "Certificates generated in $(CERTS_DIR)/"
+	@echo "Run server with: ./$(BIN_DIR)/server -cert $(CERTS_DIR)/local.crt -key $(CERTS_DIR)/local.key -web ./web"
 
 # --- Release -----------------------------------------------------------------
 

@@ -46,13 +46,13 @@ type TLSResult struct {
 	Mode        TLSMode
 }
 
-// LoadOrGenerateTLS loads existing self-signed TLS certificates from dataDir
+// LoadOrGenerateTLS loads existing self-signed TLS certificates from certsDir
 // or generates new ones. Returns a *tls.Config configured for TLS 1.3.
-func LoadOrGenerateTLS(dataDir string) (*tls.Config, *TLSConfig, error) {
+func LoadOrGenerateTLS(certsDir string) (*tls.Config, *TLSConfig, error) {
 	paths := &TLSConfig{
-		CACertPath: filepath.Join(dataDir, "ca.crt"),
-		CertPath:   filepath.Join(dataDir, "server.crt"),
-		KeyPath:    filepath.Join(dataDir, "server.key"),
+		CACertPath: filepath.Join(certsDir, "ca.crt"),
+		CertPath:   filepath.Join(certsDir, "server.crt"),
+		KeyPath:    filepath.Join(certsDir, "server.key"),
 	}
 
 	// Generate if any file is missing.

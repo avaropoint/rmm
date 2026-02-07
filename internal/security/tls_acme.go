@@ -9,16 +9,16 @@ import (
 )
 
 // NewACMEManager creates a Let's Encrypt autocert manager for the given domains.
-// Certificates are automatically obtained and renewed. Cached in dataDir/acme-certs.
+// Certificates are automatically obtained and renewed. Cached in certsDir/acme/.
 //
 // Usage:
 //
-//	manager, tlsCfg := security.NewACMEManager(dataDir, "rmm.example.com")
+//	manager, tlsCfg := security.NewACMEManager(certsDir, "rmm.example.com")
 //	go http.ListenAndServe(":80", manager.HTTPHandler(nil))  // HTTP-01 challenges
 //	server := &http.Server{Addr: ":443", TLSConfig: tlsCfg}
 //	server.ListenAndServeTLS("", "")
-func NewACMEManager(dataDir string, domains ...string) (*autocert.Manager, *tls.Config) {
-	cacheDir := filepath.Join(dataDir, "acme-certs")
+func NewACMEManager(certsDir string, domains ...string) (*autocert.Manager, *tls.Config) {
+	cacheDir := filepath.Join(certsDir, "acme")
 	_ = os.MkdirAll(cacheDir, 0700)
 
 	manager := &autocert.Manager{

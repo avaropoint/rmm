@@ -19,7 +19,8 @@ import (
 func main() {
 	addr := flag.String("addr", ":8443", "Server listen address")
 	webDir := flag.String("web", "", "Web assets directory path")
-	dataDir := flag.String("data", "data", "Data directory for database and certs")
+	dataDir := flag.String("data", "data", "Data directory for database and platform identity")
+	certsDir := flag.String("certs", "certs", "Directory for TLS certificates")
 	insecure := flag.Bool("insecure", false, "Run without TLS (development only)")
 	acmeDomain := flag.String("acme", "", "Enable Let's Encrypt for this domain (e.g. rmm.example.com)")
 	certFile := flag.String("cert", "", "Path to TLS certificate file (custom cert mode)")
@@ -28,9 +29,14 @@ func main() {
 
 	log.Printf("Server v%s (built %s)", version.Version, version.BuildTime)
 
-	// Ensure data directory exists.
+	// Ensure data and certs directories exist.
 	if err := os.MkdirAll(*dataDir, 0700); err != nil {
 		log.Fatalf("Failed to create data directory: %v", err)
+	}
+	if !*insecure {
+		if err := os.MkdirAll(*certsDir, 0700); err != nil {
+			log.Fatalf("Failed to create certs directory: %v", err)
+		}
 	}
 
 	// Initialise platform identity.
@@ -55,7 +61,7 @@ func main() {
 
 	case *acmeDomain != "":
 		tlsResult.Mode = security.TLSModeACME
-		tlsResult.ACMEManager, tlsCfg = security.NewACMEManager(*dataDir, *acmeDomain)
+		tlsResult.ACMEManager, tlsCfg = security.NewACMEManager(*certsDir, *acmeDomain)
 		if *addr == ":8443" {
 			*addr = ":443" // ACME typically needs port 443.
 		}
@@ -71,7 +77,7 @@ func main() {
 
 	default:
 		tlsResult.Mode = security.TLSModeSelfSigned
-		tlsCfg, tlsPaths, err = security.LoadOrGenerateTLS(*dataDir)
+		tlsCfg, tlsPaths, err = security.LoadOrGenerateTLS(*certsDir)
 		if err != nil {
 			log.Fatalf("TLS: %v", err)
 		}
