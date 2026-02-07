@@ -1,10 +1,21 @@
 // Package security provides cryptographic primitives for the platform:
 //
 //   - TLS certificate generation and management (ECDSA P-384)
+//   - Let's Encrypt (ACME) automatic certificate management
 //   - Platform identity keypair (Ed25519)
 //   - Agent credential signing and verification (HMAC-SHA-512)
 //   - Enrollment token and API key generation
 //   - HTTP authentication middleware
+//
+// # File layout
+//
+//   - tls.go             Types, self-signed loader, custom cert loader
+//   - tls_selfsigned.go  Self-signed CA + server certificate generation
+//   - tls_acme.go        Let's Encrypt automatic certificate management
+//   - platform.go        Ed25519 identity, credential signing
+//   - hmac.go            HMAC-SHA-512 implementation, constant-time compare
+//   - token.go           Enrollment tokens, API keys
+//   - middleware.go      HTTP authentication middleware
 //
 // # Quantum-readiness
 //

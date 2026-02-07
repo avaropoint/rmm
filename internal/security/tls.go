@@ -1,19 +1,17 @@
+// Package security provides TLS, identity, and authentication primitives.
+//
+// TLS files in this package:
+//   - tls.go           — Types, self-signed loader, custom cert loader, helpers
+//   - tls_selfsigned.go — Self-signed CA + server certificate generation
+//   - tls_acme.go       — Let's Encrypt (ACME) automatic certificate management
 package security
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
-	"net"
 	"os"
 	"path/filepath"
-	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -81,8 +79,6 @@ func LoadOrGenerateTLS(dataDir string) (*tls.Config, *TLSConfig, error) {
 		Certificates: []tls.Certificate{cert},
 		ClientCAs:    caPool,
 		MinVersion:   tls.VersionTLS13,
-		// TLS 1.3 in Go 1.23+ automatically negotiates X25519+ML-KEM-768
-		// hybrid post-quantum key exchange with compatible peers.
 	}
 
 	return tlsCfg, paths, nil
@@ -100,154 +96,12 @@ func LoadCustomTLS(certFile, keyFile string) (*tls.Config, error) {
 	}, nil
 }
 
-// NewACMEManager creates a Let's Encrypt autocert manager for the given domains.
-// Certificates are cached in dataDir/acme-certs.
-func NewACMEManager(dataDir string, domains ...string) (*autocert.Manager, *tls.Config) {
-	cacheDir := filepath.Join(dataDir, "acme-certs")
-	_ = os.MkdirAll(cacheDir, 0700)
-
-	manager := &autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist(domains...),
-		Cache:      autocert.DirCache(cacheDir),
-	}
-
-	tlsCfg := manager.TLSConfig()
-	tlsCfg.MinVersion = tls.VersionTLS13
-
-	return manager, tlsCfg
-}
-
 // ReadCACert returns the PEM-encoded CA certificate.
 func ReadCACert(paths *TLSConfig) ([]byte, error) {
 	return os.ReadFile(paths.CACertPath)
 }
 
-func generateCerts(paths *TLSConfig) error {
-	// Generate CA key.
-	caKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		return err
-	}
-
-	caTemplate := &x509.Certificate{
-		SerialNumber: newSerial(),
-		Subject: pkix.Name{
-			Organization: []string{"Platform CA"},
-			CommonName:   "Platform Root CA",
-		},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour), // 10 years
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		MaxPathLen:            1,
-	}
-
-	caCertDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		return err
-	}
-
-	caCert, err := x509.ParseCertificate(caCertDER)
-	if err != nil {
-		return err
-	}
-
-	// Generate server key.
-	serverKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		return err
-	}
-
-	// Collect SANs: localhost, hostname, all local IPs.
-	dnsNames := []string{"localhost"}
-	var ipAddrs []net.IP
-
-	if hostname, err := os.Hostname(); err == nil {
-		dnsNames = append(dnsNames, hostname)
-	}
-
-	ipAddrs = append(ipAddrs, net.IPv4(127, 0, 0, 1), net.IPv6loopback)
-
-	if ifaces, err := net.Interfaces(); err == nil {
-		for _, iface := range ifaces {
-			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-				continue
-			}
-			addrs, err := iface.Addrs()
-			if err != nil {
-				continue
-			}
-			for _, addr := range addrs {
-				var ip net.IP
-				switch v := addr.(type) {
-				case *net.IPNet:
-					ip = v.IP
-				case *net.IPAddr:
-					ip = v.IP
-				}
-				if ip != nil && !ip.IsLoopback() {
-					ipAddrs = append(ipAddrs, ip)
-				}
-			}
-		}
-	}
-
-	serverTemplate := &x509.Certificate{
-		SerialNumber: newSerial(),
-		Subject: pkix.Name{
-			Organization: []string{"Platform"},
-			CommonName:   "Platform Server",
-		},
-		DNSNames:    dnsNames,
-		IPAddresses: ipAddrs,
-		NotBefore:   time.Now().Add(-time.Hour),
-		NotAfter:    time.Now().Add(2 * 365 * 24 * time.Hour), // 2 years
-		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-
-	serverCertDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caCert, &serverKey.PublicKey, caKey)
-	if err != nil {
-		return err
-	}
-
-	// Write CA cert.
-	if err := writePEM(paths.CACertPath, "CERTIFICATE", caCertDER); err != nil {
-		return err
-	}
-
-	// Write server cert.
-	if err := writePEM(paths.CertPath, "CERTIFICATE", serverCertDER); err != nil {
-		return err
-	}
-
-	// Write server key.
-	keyBytes, err := x509.MarshalECPrivateKey(serverKey)
-	if err != nil {
-		return err
-	}
-
-	return writePEM(paths.KeyPath, "EC PRIVATE KEY", keyBytes)
-}
-
-func writePEM(path, blockType string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close() //nolint:errcheck
-
-	return pem.Encode(f, &pem.Block{Type: blockType, Bytes: data})
-}
-
-func newSerial() *big.Int {
-	max := new(big.Int).Lsh(big.NewInt(1), 128)
-	serial, _ := rand.Int(rand.Reader, max)
-	return serial
-}
-
+// fileExists checks if a file exists at the given path.
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
