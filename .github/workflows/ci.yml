@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Format check
+        run: |
+          if [ -n "$(gofmt -l ./cmd/ ./internal/)" ]; then
+            echo "::error::Go files are not formatted. Run 'gofmt -w ./cmd/ ./internal/'"
+            gofmt -d ./cmd/ ./internal/
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build server
+        run: go build -o bin/server ./cmd/server
+
+      - name: Build agent
+        run: go build -o bin/agent ./cmd/agent
+
+      - name: Cross-compile agents
+        run: |
+          platforms=("linux/amd64" "linux/arm64" "linux/arm" "darwin/amd64" "darwin/arm64" "windows/amd64" "windows/arm64")
+          for platform in "${platforms[@]}"; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then ext=".exe"; fi
+            echo "Building agent ${os}/${arch}..."
+            GOOS=$os GOARCH=$arch go build -o "bin/agent-${os}-${arch}${ext}" ./cmd/agent
+          done
+
+      - name: Cross-compile servers
+        run: |
+          platforms=("linux/amd64" "linux/arm64" "darwin/amd64" "darwin/arm64" "windows/amd64" "windows/arm64")
+          for platform in "${platforms[@]}"; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then ext=".exe"; fi
+            echo "Building server ${os}/${arch}..."
+            GOOS=$os GOARCH=$arch go build -o "bin/server-${os}-${arch}${ext}" ./cmd/server
+          done

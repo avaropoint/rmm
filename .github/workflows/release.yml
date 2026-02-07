@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binaries
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_TIME: ${{ github.event.head_commit.timestamp }}
+        run: |
+          LDFLAGS="-s -w -X github.com/avaropoint/rmm/internal/version.Version=${VERSION} -X github.com/avaropoint/rmm/internal/version.BuildTime=${BUILD_TIME}"
+          mkdir -p release
+
+          agent_platforms=("linux/amd64" "linux/arm64" "linux/arm" "darwin/amd64" "darwin/arm64" "windows/amd64" "windows/arm64")
+          server_platforms=("linux/amd64" "linux/arm64" "darwin/amd64" "darwin/arm64" "windows/amd64" "windows/arm64")
+
+          for platform in "${agent_platforms[@]}"; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then ext=".exe"; fi
+            echo "Building agent ${os}/${arch}..."
+            GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -o "release/agent-${os}-${arch}${ext}" ./cmd/agent
+          done
+
+          for platform in "${server_platforms[@]}"; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then ext=".exe"; fi
+            echo "Building server ${os}/${arch}..."
+            GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -o "release/server-${os}-${arch}${ext}" ./cmd/server
+          done
+
+      - name: Package web assets
+        run: tar -czf release/web.tar.gz web/
+
+      - name: Copy install scripts
+        run: |
+          cp scripts/install.sh release/
+          cp scripts/install.ps1 release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/agent-*
+            release/server-*
+            release/web.tar.gz
+            release/install.sh
+            release/install.ps1
+            release/checksums.txt
