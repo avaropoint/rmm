@@ -205,6 +205,13 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		case protocol.OpPing:
 			_ = protocol.WriteServerFrame(conn, protocol.OpPong, data)
 			continue
+		case protocol.OpBinary:
+			// Relay binary frames (screen data) to viewer as-is — zero parsing.
+			s.mu.RLock()
+			if vc, ok := s.viewers[agent.ID]; ok {
+				_ = protocol.WriteServerFrame(vc, protocol.OpBinary, data)
+			}
+			s.mu.RUnlock()
 		case protocol.OpText:
 			var m protocol.Message
 			if err := json.Unmarshal(data, &m); err != nil {
@@ -212,7 +219,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 			}
 
 			switch m.Type {
-			case "screen", "display_switched":
+			case "display_switched":
 				s.mu.RLock()
 				if vc, ok := s.viewers[agent.ID]; ok {
 					_ = protocol.WriteServerFrame(vc, protocol.OpText, data)

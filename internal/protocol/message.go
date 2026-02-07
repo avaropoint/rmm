@@ -14,6 +14,15 @@ const (
 	OpPong     = 10
 )
 
+// Binary message type prefixes.
+// The first byte of every binary WebSocket frame identifies the payload kind,
+// allowing multiplexed channels over a single connection.
+const (
+	BinScreen byte = 0x01 // JPEG screen-capture frame
+	BinFile   byte = 0x02 // File-transfer chunk (reserved)
+	BinAudio  byte = 0x03 // Audio stream chunk (reserved)
+)
+
 // Message is the envelope for all WebSocket messages exchanged
 // between agents, the server, and viewers.
 type Message struct {

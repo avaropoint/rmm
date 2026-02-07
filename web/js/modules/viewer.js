@@ -9,11 +9,13 @@ import { WebSocketClient } from '../core/websocket.js';
 export class ScreenViewer extends EventEmitter {
     #canvas;
     #ctx;
-    #ws      = null;
-    #agentId = null;
-    #active  = false;
-    #handlers = {};
+    #ws           = null;
+    #agentId      = null;
+    #active       = false;
+    #handlers     = {};
     #options;
+    #pendingFrame = null;
+    #rendering    = false;
 
     /**
      * @param {string|HTMLCanvasElement} canvas — Selector or element.
@@ -55,13 +57,15 @@ export class ScreenViewer extends EventEmitter {
 
         this.#ws.on('close', () => {
             this.#active = false;
+            this.#pendingFrame = null;
+            this.#rendering = false;
             this.#detachInput();
             this.emit('disconnected', agentId);
         });
 
-        this.#ws.on('screen',           (msg) => this.#renderFrame(msg.payload));
-        this.#ws.on('display_switched',  (msg) => this.emit('display_switched', msg.payload));
-        this.#ws.on('error',             (err) => this.emit('error', err));
+        this.#ws.on('binary',            (buf) => this.#handleBinary(buf));
+        this.#ws.on('display_switched',   (msg) => this.emit('display_switched', msg.payload));
+        this.#ws.on('error',              (err) => this.emit('error', err));
 
         return this.#ws.connect();
     }
@@ -88,22 +92,52 @@ export class ScreenViewer extends EventEmitter {
         });
     }
 
-    /* Frame rendering */
+    /* Binary frame handling */
 
-    #renderFrame(payload) {
-        if (!payload?.data) return;
+    /** Binary message type prefixes (must match protocol.Bin* constants). */
+    static #BIN_SCREEN = 0x01;
 
-        const img = new Image();
-        img.onload = () => {
-            this.#canvas.width  = img.width;
-            this.#canvas.height = img.height;
-            this.#ctx.drawImage(img, 0, 0);
-            URL.revokeObjectURL(img.src);
-            this.emit('frame', { width: img.width, height: img.height });
-        };
+    /**
+     * Route an incoming binary WebSocket frame by its type prefix.
+     * @param {ArrayBuffer} buffer
+     */
+    #handleBinary(buffer) {
+        const view = new Uint8Array(buffer);
+        if (view[0] === ScreenViewer.#BIN_SCREEN) {
+            // Skip the 1-byte type prefix; queue the raw JPEG for rendering
+            this.#pendingFrame = buffer.slice(1);
+            if (!this.#rendering) this.#drainFrameQueue();
+        }
+    }
 
-        // Decode base64 via fetch — faster than manual atob+charCode loop
-        img.src = `data:image/jpeg;base64,${payload.data}`;
+    /**
+     * Render the most recent frame, skipping any that arrived while decoding.
+     * Uses createImageBitmap for off-main-thread JPEG decode.
+     */
+    async #drainFrameQueue() {
+        this.#rendering = true;
+
+        while (this.#pendingFrame) {
+            const jpeg = this.#pendingFrame;
+            this.#pendingFrame = null;
+
+            const blob   = new Blob([jpeg], { type: 'image/jpeg' });
+            const bitmap = await createImageBitmap(blob);
+            const w = bitmap.width;
+            const h = bitmap.height;
+
+            if (this.#canvas.width !== w || this.#canvas.height !== h) {
+                this.#canvas.width  = w;
+                this.#canvas.height = h;
+            }
+
+            this.#ctx.drawImage(bitmap, 0, 0);
+            bitmap.close();
+
+            this.emit('frame', { width: w, height: h });
+        }
+
+        this.#rendering = false;
     }
 
     /* Input handling */

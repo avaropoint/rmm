@@ -121,6 +121,12 @@ func (a *Agent) sendMessage(msg protocol.Message) error {
 	return protocol.WriteClientFrame(a.conn, protocol.OpText, data)
 }
 
+// sendBinary sends a raw binary frame over the WebSocket.
+// The caller is responsible for including the binary type prefix byte.
+func (a *Agent) sendBinary(data []byte) error {
+	return protocol.WriteClientFrame(a.conn, protocol.OpBinary, data)
+}
+
 // register collects system information and sends it to the server.
 func (a *Agent) register() error {
 	info := CollectSystemInfo(a.name)

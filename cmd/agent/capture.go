@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -62,14 +61,11 @@ func (a *Agent) startCapture() {
 					continue
 				}
 
-				screenData, _ := json.Marshal(map[string]interface{}{
-					"data": base64.StdEncoding.EncodeToString(data),
-				})
-
-				_ = a.sendMessage(protocol.Message{
-					Type:    "screen",
-					Payload: screenData,
-				})
+				// Binary frame: [type prefix | JPEG bytes]
+				frame := make([]byte, 1+len(data))
+				frame[0] = protocol.BinScreen
+				copy(frame[1:], data)
+				_ = a.sendBinary(frame)
 			}
 		}
 	}()

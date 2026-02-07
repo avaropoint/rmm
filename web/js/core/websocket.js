@@ -44,6 +44,7 @@ export class WebSocketClient extends EventEmitter {
 
         return new Promise((resolve, reject) => {
             this.#ws = new WebSocket(this.#url);
+            this.#ws.binaryType = 'arraybuffer';
             this.#intentionalClose = false;
 
             this.#ws.onopen = () => {
@@ -65,6 +66,13 @@ export class WebSocketClient extends EventEmitter {
             };
 
             this.#ws.onmessage = ({ data: raw }) => {
+                // Binary frames: emit as ArrayBuffer for high-performance paths
+                if (raw instanceof ArrayBuffer) {
+                    this.emit('binary', raw);
+                    return;
+                }
+
+                // Text frames: parse JSON, emit by type
                 try {
                     const data = JSON.parse(raw);
                     this.emit('message', data);
