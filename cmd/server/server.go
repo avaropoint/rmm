@@ -162,7 +162,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		Displays:      reg.Displays,
 		DisplayCount:  displayCount,
 		LocalIPs:      reg.LocalIPs,
-		Username:       reg.Username,
+		Username:      reg.Username,
 		UptimeSeconds: reg.UptimeSeconds,
 		AgentVersion:  reg.AgentVersion,
 		conn:          conn,
@@ -328,7 +328,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, _ *http.Request) {
 			Displays:      a.Displays,
 			DisplayCount:  a.DisplayCount,
 			LocalIPs:      a.LocalIPs,
-			Username:       a.Username,
+			Username:      a.Username,
 			UptimeSeconds: a.UptimeSeconds,
 			AgentVersion:  a.AgentVersion,
 		})

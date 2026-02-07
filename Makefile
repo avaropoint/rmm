@@ -20,19 +20,19 @@ PLATFORMS := \
 	windows/amd64 \
 	windows/arm64
 
-.PHONY: all clean server agent agents release dist help dev stop install
+.PHONY: all clean server agent agents release dist help dev stop install lint check
 
 # Default: build everything
-all: server agents
+all: lint server agents
 
 # Build server for current platform
-server:
+server: lint
 	@echo "Building server..."
 	@mkdir -p $(BIN_DIR)
 	go build $(LDFLAGS) -o $(BIN_DIR)/server ./cmd/server
 
 # Build agent for current platform only
-agent:
+agent: lint
 	@echo "Building agent for current platform..."
 	@mkdir -p $(BIN_DIR)
 	go build $(LDFLAGS) -o $(BIN_DIR)/agent ./cmd/agent
@@ -74,6 +74,24 @@ run-agent: agent
 # Clean build artifacts
 clean:
 	rm -rf $(BIN_DIR) $(RELEASE_DIR)
+
+# Lint: format check + vet (fast, runs before every build)
+lint:
+	@UNFORMATTED=$$(gofmt -l ./cmd/ ./internal/ 2>/dev/null); \
+	if [ -n "$$UNFORMATTED" ]; then \
+		echo "Error: Go files are not formatted:"; \
+		echo "$$UNFORMATTED"; \
+		echo "Run 'gofmt -w ./cmd/ ./internal/' to fix."; \
+		exit 1; \
+	fi
+	@go vet ./...
+
+# CI check: format + vet + build all (used by CI pipeline)
+check:
+	@echo "Running checks..."
+	@$(MAKE) lint
+	@go build ./...
+	@echo "All checks passed."
 
 # === RELEASE TARGETS ===
 
@@ -162,6 +180,8 @@ help:
 	@echo "  make run-agent    - Build and run agent"
 	@echo "  make stop         - Stop running processes"
 	@echo "  make install      - Install to /usr/local/bin"
+	@echo "  make lint         - Check formatting + vet"
+	@echo "  make check        - Full CI check (lint + build)"
 	@echo "  make clean        - Remove all build artifacts"
 	@echo ""
 	@echo "Supported platforms:"

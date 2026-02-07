@@ -195,5 +195,3 @@ func dialWebSocket(serverURL string) (net.Conn, *bufio.Reader, error) {
 
 	return conn, reader, nil
 }
-
-
