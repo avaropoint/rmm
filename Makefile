@@ -20,7 +20,7 @@ PLATFORMS := \
 	windows/amd64 \
 	windows/arm64
 
-.PHONY: all clean server agent agents release dist help dev stop install lint check
+.PHONY: all clean server agent agents release dist help dev dev-tls enroll enroll-tls stop install lint check
 
 # Default: build everything
 all: lint server agents
@@ -63,13 +63,13 @@ build-%:
 	GOOS=$(OS) GOARCH=$(ARCH) go build $(LDFLAGS) \
 		-o $(BIN_DIR)/agent-$(OS)-$(ARCH)$(EXT) ./cmd/agent
 
-# Run server locally
+# Run server locally (insecure dev mode)
 run-server: server
-	./$(BIN_DIR)/server
+	./$(BIN_DIR)/server -insecure -web ./web
 
-# Run agent locally
+# Run agent locally (insecure dev mode — must be enrolled first)
 run-agent: agent
-	./$(BIN_DIR)/agent -server ws://localhost:8080
+	./$(BIN_DIR)/agent -insecure
 
 # Clean build artifacts
 clean:
@@ -143,13 +143,45 @@ dist: release checksums package-web
 
 # === DEVELOPMENT TARGETS ===
 
-# Quick dev: build and run both
+# Quick dev: build and run in insecure mode (no TLS)
+# First run: use 'make enroll' to register the agent with the server.
 dev: server agent
-	@echo "Starting server..."
+	@echo "Starting server (insecure mode)..."
+	@./$(BIN_DIR)/server -insecure -web ./web &
+	@sleep 2
+	@echo "Starting agent (insecure mode)..."
+	@./$(BIN_DIR)/agent -insecure
+
+# Dev with self-signed TLS (closer to production)
+dev-tls: server agent
+	@echo "Starting server (self-signed TLS)..."
 	@./$(BIN_DIR)/server -web ./web &
 	@sleep 2
 	@echo "Starting agent..."
-	@./$(BIN_DIR)/agent -server ws://localhost:8080
+	@./$(BIN_DIR)/agent
+
+# Enroll agent with server (run server first, then use the enrollment code from logs)
+# Usage: make enroll CODE=<code>
+enroll: agent
+	@if [ -z "$(CODE)" ]; then \
+		echo "Usage: make enroll CODE=<enrollment-code>"; \
+		echo ""; \
+		echo "Steps:"; \
+		echo "  1. Start server: make run-server"; \
+		echo "  2. Log in to dashboard and create an enrollment token"; \
+		echo "  3. Run: make enroll CODE=<token>"; \
+		exit 1; \
+	fi
+	./$(BIN_DIR)/agent -server http://localhost:8080 -enroll $(CODE) -insecure
+
+# Enroll agent with TLS server
+# Usage: make enroll-tls CODE=<code>
+enroll-tls: agent
+	@if [ -z "$(CODE)" ]; then \
+		echo "Usage: make enroll-tls CODE=<enrollment-code>"; \
+		exit 1; \
+	fi
+	./$(BIN_DIR)/agent -server https://localhost:8443 -enroll $(CODE) -insecure
 
 # Stop running processes
 stop:
@@ -181,9 +213,12 @@ help:
 	@echo "  make package-web  - Package web assets"
 	@echo ""
 	@echo "Development:"
-	@echo "  make dev          - Build and run server + agent"
-	@echo "  make run-server   - Build and run server"
-	@echo "  make run-agent    - Build and run agent"
+	@echo "  make dev          - Build and run (insecure, no TLS)"
+	@echo "  make dev-tls      - Build and run (self-signed TLS)"
+	@echo "  make enroll CODE= - Enroll agent with insecure server"
+	@echo "  make enroll-tls CODE= - Enroll agent with TLS server"
+	@echo "  make run-server   - Run server (insecure mode)"
+	@echo "  make run-agent    - Run enrolled agent (insecure mode)"
 	@echo "  make stop         - Stop running processes"
 	@echo "  make install      - Install to /usr/local/bin"
 	@echo "  make lint         - Check formatting + vet"

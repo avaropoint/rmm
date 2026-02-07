@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -125,35 +124,25 @@ func enroll(serverURL, code, name string, insecure bool) (*AgentConfig, error) {
 }
 
 // buildTLSConfig creates a TLS configuration from the agent config.
+// Trust is established via the CA certificate received during enrollment
+// (self-signed mode) or the system CA store (ACME / custom cert mode).
 func buildTLSConfig(cfg *AgentConfig, insecure bool) *tls.Config {
 	if !strings.HasPrefix(cfg.ServerURL, "wss://") {
-		return nil
+		return nil // plain WS — no TLS needed.
 	}
 
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS13} //nolint:gosec
 
 	if cfg.CACert != "" {
+		// Self-signed: use the CA cert received at enrollment time.
 		pool := x509.NewCertPool()
 		pool.AppendCertsFromPEM([]byte(cfg.CACert))
 		tlsCfg.RootCAs = pool
 	} else if insecure {
+		// Dev mode: skip verification entirely.
 		tlsCfg.InsecureSkipVerify = true //nolint:gosec
 	}
-
-	// Optional: verify server cert fingerprint from enrollment.
-	if cfg.Fingerprint != "" {
-		expected := cfg.Fingerprint
-		tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return fmt.Errorf("no server certificate")
-			}
-			h := sha256.Sum256(rawCerts[0])
-			if fmt.Sprintf("%x", h) != expected {
-				return fmt.Errorf("server fingerprint mismatch")
-			}
-			return nil
-		}
-	}
+	// ACME / custom certs: system CA pool is used automatically.
 
 	return tlsCfg
 }

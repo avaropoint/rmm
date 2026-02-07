@@ -21,6 +21,9 @@ func main() {
 	webDir := flag.String("web", "", "Web assets directory path")
 	dataDir := flag.String("data", "data", "Data directory for database and certs")
 	insecure := flag.Bool("insecure", false, "Run without TLS (development only)")
+	acmeDomain := flag.String("acme", "", "Enable Let's Encrypt for this domain (e.g. rmm.example.com)")
+	certFile := flag.String("cert", "", "Path to TLS certificate file (custom cert mode)")
+	keyFile := flag.String("key", "", "Path to TLS key file (custom cert mode)")
 	flag.Parse()
 
 	log.Printf("Server v%s (built %s)", version.Version, version.BuildTime)
@@ -37,16 +40,45 @@ func main() {
 	}
 	log.Printf("Platform fingerprint: %s", platform.Fingerprint())
 
-	// Initialise TLS.
+	// Determine TLS mode.
 	var tlsCfg *tls.Config
 	var tlsPaths *security.TLSConfig
-	if !*insecure {
+	var tlsResult security.TLSResult
+
+	switch {
+	case *insecure:
+		tlsResult.Mode = security.TLSModeOff
+		if *addr == ":8443" {
+			*addr = ":8080" // Default to 8080 in insecure mode.
+		}
+		log.Println("TLS: OFF (insecure development mode)")
+
+	case *acmeDomain != "":
+		tlsResult.Mode = security.TLSModeACME
+		tlsResult.ACMEManager, tlsCfg = security.NewACMEManager(*dataDir, *acmeDomain)
+		if *addr == ":8443" {
+			*addr = ":443" // ACME typically needs port 443.
+		}
+		log.Printf("TLS: ACME (Let's Encrypt) for domain %s", *acmeDomain)
+
+	case *certFile != "" && *keyFile != "":
+		tlsResult.Mode = security.TLSModeCustom
+		tlsCfg, err = security.LoadCustomTLS(*certFile, *keyFile)
+		if err != nil {
+			log.Fatalf("TLS: %v", err)
+		}
+		log.Printf("TLS: Custom certificate (%s)", *certFile)
+
+	default:
+		tlsResult.Mode = security.TLSModeSelfSigned
 		tlsCfg, tlsPaths, err = security.LoadOrGenerateTLS(*dataDir)
 		if err != nil {
 			log.Fatalf("TLS: %v", err)
 		}
-		log.Printf("TLS certificates ready (%s)", tlsPaths.CertPath)
+		tlsResult.Paths = tlsPaths
+		log.Printf("TLS: Self-signed certificates (%s)", tlsPaths.CertPath)
 	}
+	tlsResult.Config = tlsCfg
 
 	// Open database.
 	dbPath := filepath.Join(*dataDir, "platform.db")
@@ -86,12 +118,30 @@ func main() {
 	// Static files.
 	http.Handle("/", http.FileServer(http.Dir(absWebDir)))
 
-	if *insecure {
+	switch tlsResult.Mode {
+	case security.TLSModeOff:
 		log.Printf("WARNING: Running without TLS (development mode)")
 		log.Printf("Dashboard: http://localhost%s", *addr)
 		log.Fatal(http.ListenAndServe(*addr, nil))
-	} else {
-		log.Printf("Dashboard: https://localhost%s", *addr)
+
+	case security.TLSModeACME:
+		// Start HTTP-01 challenge handler on port 80.
+		go func() {
+			log.Println("ACME: Starting HTTP-01 challenge handler on :80")
+			if err := http.ListenAndServe(":80", tlsResult.ACMEManager.HTTPHandler(nil)); err != nil {
+				log.Printf("ACME HTTP handler error: %v", err)
+			}
+		}()
+		log.Printf("Dashboard: https://%s%s", *acmeDomain, *addr)
+		server := &http.Server{
+			Addr:      *addr,
+			TLSConfig: tlsCfg,
+		}
+		log.Fatal(server.ListenAndServeTLS("", ""))
+
+	default: // TLSModeSelfSigned or TLSModeCustom
+		scheme := "https"
+		log.Printf("Dashboard: %s://localhost%s", scheme, *addr)
 		server := &http.Server{
 			Addr:      *addr,
 			TLSConfig: tlsCfg,

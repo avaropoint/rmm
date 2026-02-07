@@ -2,6 +2,9 @@
 /bin/
 /release/
 
+# Runtime data (keys, certs, database)
+/data/
+
 # OS junk
 .DS_Store
 Thumbs.db
