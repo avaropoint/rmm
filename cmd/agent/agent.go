@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,8 @@ const heartbeatInterval = 30 * time.Second
 type Agent struct {
 	serverURL      string
 	name           string
+	credential     string
+	tlsConfig      *tls.Config
 	conn           net.Conn
 	reader         *bufio.Reader
 	capturing      bool
@@ -34,7 +38,7 @@ type Agent struct {
 // the main message loop. It returns on disconnect.
 func (a *Agent) run() error {
 	var err error
-	a.conn, a.reader, err = dialWebSocket(a.serverURL)
+	a.conn, a.reader, err = dialWebSocket(a.serverURL, a.tlsConfig)
 	if err != nil {
 		return err
 	}
@@ -133,15 +137,18 @@ func (a *Agent) register() error {
 	a.name = info.Name
 	a.currentDisplay = 1
 
+	// Include enrollment credential in registration payload.
+	info.Credential = a.credential
+
 	return a.sendMessage(protocol.Message{
 		Type:    "register",
 		Payload: info.ToJSON(),
 	})
 }
 
-// dialWebSocket connects to the server using a raw TCP connection
+// dialWebSocket connects to the server using a raw TCP (or TLS) connection
 // and performs the WebSocket handshake.
-func dialWebSocket(serverURL string) (net.Conn, *bufio.Reader, error) {
+func dialWebSocket(serverURL string, tlsConfig *tls.Config) (net.Conn, *bufio.Reader, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, nil, err
@@ -155,7 +162,21 @@ func dialWebSocket(serverURL string) (net.Conn, *bufio.Reader, error) {
 		path = path + "/ws/agent"
 	}
 
-	conn, err := net.Dial("tcp", host)
+	// Ensure host has a port.
+	if !strings.Contains(host, ":") {
+		if u.Scheme == "wss" {
+			host += ":443"
+		} else {
+			host += ":80"
+		}
+	}
+
+	var conn net.Conn
+	if u.Scheme == "wss" && tlsConfig != nil {
+		conn, err = tls.Dial("tcp", host, tlsConfig)
+	} else {
+		conn, err = net.Dial("tcp", host)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

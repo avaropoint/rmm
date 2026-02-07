@@ -16,6 +16,7 @@ import (
 // The struct is serialised directly to JSON for the registration payload
 // and can be refreshed on demand without changing the message format.
 type SystemInfo struct {
+	Credential    string                 `json:"credential,omitempty"`
 	Name          string                 `json:"name"`
 	Hostname      string                 `json:"hostname"`
 	OS            string                 `json:"os"`

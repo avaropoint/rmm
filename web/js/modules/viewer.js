@@ -45,7 +45,8 @@ export class ScreenViewer extends EventEmitter {
 
         this.#agentId = agentId;
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const url = `${protocol}//${location.host}/ws/viewer?agent=${agentId}`;
+        const token = sessionStorage.getItem('rmm_api_key') || '';
+        const url = `${protocol}//${location.host}/ws/viewer?agent=${agentId}&token=${encodeURIComponent(token)}`;
 
         this.#ws = new WebSocketClient(url, { reconnect: false });
 

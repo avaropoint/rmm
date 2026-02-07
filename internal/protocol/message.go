@@ -42,6 +42,7 @@ type DisplayInfo struct {
 // Shared between agent (serialisation) and server (deserialisation) to
 // keep the two sides in sync.
 type Registration struct {
+	Credential    string        `json:"credential,omitempty"`
 	Name          string        `json:"name"`
 	Hostname      string        `json:"hostname"`
 	OS            string        `json:"os"`

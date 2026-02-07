@@ -8,6 +8,25 @@
     <link rel="stylesheet" href="/css/main.css">
 </head>
 <body>
+    <!-- Login Overlay -->
+    <div id="login-overlay" class="login-overlay">
+        <div class="login-card">
+            <div class="login-logo">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/>
+                </svg>
+            </div>
+            <h2 class="login-title">Dashboard</h2>
+            <form id="login-form" class="login-form">
+                <label for="api-key-input" class="login-label">API Key</label>
+                <input type="password" id="api-key-input" class="login-input"
+                       placeholder="rmm_..." autocomplete="off" required>
+                <p id="login-error" class="login-error" hidden></p>
+                <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+            </form>
+        </div>
+    </div>
+
     <!-- Header -->
     <header class="header">
         <div class="header-content">
@@ -24,9 +43,41 @@
                     <span>Agents:</span>
                     <span id="agent-count" class="header-stat-value">0</span>
                 </div>
+                <button id="enrollment-btn" class="btn btn-secondary btn-sm"
+                        data-action="toggle-enrollment">Enrollment</button>
+                <button id="logout-btn" class="btn btn-secondary btn-sm"
+                        data-action="logout">Logout</button>
             </div>
         </div>
     </header>
+
+    <!-- Enrollment Panel -->
+    <div id="enrollment-panel" class="enrollment-panel" hidden>
+        <div class="container">
+            <div class="enrollment-header">
+                <h3>Enrollment Tokens</h3>
+                <div class="enrollment-actions">
+                    <button class="btn btn-primary btn-sm" data-action="create-token"
+                            data-token-type="attended">+ Attended</button>
+                    <button class="btn btn-secondary btn-sm" data-action="create-token"
+                            data-token-type="unattended">+ Unattended</button>
+                </div>
+            </div>
+            <div id="enrollment-code-display" class="enrollment-code" hidden>
+                <p class="enrollment-code-label">Enrollment code (use within 15 minutes):</p>
+                <code id="enrollment-code-value" class="enrollment-code-value"></code>
+                <p class="enrollment-code-hint">
+                    Run: <code>agent -server https://&lt;host&gt;:&lt;port&gt; -enroll &lt;code&gt; -insecure</code>
+                </p>
+            </div>
+            <table id="enrollment-tokens" class="table">
+                <thead>
+                    <tr><th>ID</th><th>Type</th><th>Label</th><th>Created</th><th>Expires</th><th></th></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
 
     <!-- Main Content -->
     <main class="main">

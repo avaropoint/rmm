@@ -15,23 +15,157 @@ import { Icons }                       from './components/icons.js';
 import { escapeHtml, formatOS, formatIP,
          formatRelativeTime, formatBytes,
          formatUptime, formatDisplays }  from './core/utils.js';
+import { get, post, del, setAuthToken, getAuthToken } from './core/http.js';
 
 /* Selectors */
 
 const SEL = Object.freeze({
-    agents:        '#agents',
-    agentCount:    '#agent-count',
-    viewerModal:   '#viewer-modal',
-    viewerTitle:   '#viewer-title',
-    canvas:        '#screen',
-    displayWrap:   '#display-selector',
-    displaySelect: '#display-select',
+    agents:           '#agents',
+    agentCount:       '#agent-count',
+    viewerModal:      '#viewer-modal',
+    viewerTitle:      '#viewer-title',
+    canvas:           '#screen',
+    displayWrap:      '#display-selector',
+    displaySelect:    '#display-select',
+    loginOverlay:     '#login-overlay',
+    loginForm:        '#login-form',
+    loginError:       '#login-error',
+    apiKeyInput:      '#api-key-input',
+    enrollmentPanel:  '#enrollment-panel',
+    enrollmentTokens: '#enrollment-tokens',
+    enrollCodeDisplay:'#enrollment-code-display',
+    enrollCodeValue:  '#enrollment-code-value',
 });
 
 /* State */
 
 const agents = new AgentManager();
 let   viewer = null;
+
+/* ─── Authentication ─── */
+
+const AUTH_KEY = 'rmm_api_key';
+
+function isAuthenticated() {
+    return !!getAuthToken();
+}
+
+function showLogin() {
+    const overlay = document.querySelector(SEL.loginOverlay);
+    if (overlay) overlay.hidden = false;
+}
+
+function hideLogin() {
+    const overlay = document.querySelector(SEL.loginOverlay);
+    if (overlay) overlay.hidden = true;
+}
+
+async function handleLogin(event) {
+    event.preventDefault();
+    const input = document.querySelector(SEL.apiKeyInput);
+    const error = document.querySelector(SEL.loginError);
+    const key = input?.value?.trim();
+
+    if (!key) return;
+
+    try {
+        // Verify key with server (unauthenticated endpoint).
+        const resp = await fetch('/api/auth/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key }),
+        });
+        if (!resp.ok) throw new Error('Invalid API key');
+
+        setAuthToken(key);
+        sessionStorage.setItem(AUTH_KEY, key);
+        hideLogin();
+        if (error) error.hidden = true;
+        agents.startPolling();
+        toast('Authenticated', 'success');
+    } catch {
+        if (error) {
+            error.textContent = 'Invalid API key';
+            error.hidden = false;
+        }
+    }
+}
+
+function handleLogout() {
+    setAuthToken(null);
+    sessionStorage.removeItem(AUTH_KEY);
+    agents.stopPolling();
+    showLogin();
+}
+
+/* ─── Enrollment Management ─── */
+
+function toggleEnrollment() {
+    const panel = document.querySelector(SEL.enrollmentPanel);
+    if (!panel) return;
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) refreshTokens();
+}
+
+async function refreshTokens() {
+    try {
+        const tokens = await get('/api/enrollment');
+        renderTokens(tokens ?? []);
+    } catch (err) {
+        toast('Failed to load tokens: ' + err.message, 'error');
+    }
+}
+
+function renderTokens(tokens) {
+    const tbody = document.querySelector(SEL.enrollmentTokens + ' tbody');
+    if (!tbody) return;
+
+    if (tokens.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;opacity:0.6">No tokens</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = tokens.map(t => `
+        <tr>
+            <td><code>${escapeHtml(t.id)}</code></td>
+            <td>${escapeHtml(t.type)}</td>
+            <td>${escapeHtml(t.label || '—')}</td>
+            <td>${formatRelativeTime(new Date(t.created_at))}</td>
+            <td>${t.expires_at ? formatRelativeTime(new Date(t.expires_at)) : '—'}</td>
+            <td><button class="btn btn-sm" data-action="delete-token" data-token-id="${t.id}">Delete</button></td>
+        </tr>
+    `).join('');
+}
+
+async function createToken(type) {
+    try {
+        const label = type === 'unattended' ? 'Unattended deployment' : '';
+        const result = await post('/api/enrollment', { type, label });
+
+        // Show the code.
+        const display = document.querySelector(SEL.enrollCodeDisplay);
+        const value = document.querySelector(SEL.enrollCodeValue);
+        if (display && value) {
+            value.textContent = result.code;
+            display.hidden = false;
+        }
+
+        toast(`${type} token created`, 'success');
+        refreshTokens();
+    } catch (err) {
+        toast('Failed to create token: ' + err.message, 'error');
+    }
+}
+
+async function deleteToken(id) {
+    try {
+        await del(`/api/enrollment?id=${id}`);
+        toast('Token deleted', 'success');
+        refreshTokens();
+    } catch (err) {
+        toast('Failed to delete token: ' + err.message, 'error');
+    }
+}
 
 /* Agent card rendering */
 
@@ -189,12 +323,37 @@ function handleGlobalClick(event) {
         case 'disconnect':
             disconnectViewer();
             break;
+        case 'toggle-enrollment':
+            toggleEnrollment();
+            break;
+        case 'create-token':
+            createToken(btn.dataset.tokenType);
+            break;
+        case 'delete-token':
+            deleteToken(btn.dataset.tokenId);
+            break;
+        case 'logout':
+            handleLogout();
+            break;
     }
 }
 
 /* Bootstrap */
 
 function init() {
+    // Check for stored session.
+    const savedKey = sessionStorage.getItem(AUTH_KEY);
+    if (savedKey) {
+        setAuthToken(savedKey);
+        hideLogin();
+    } else {
+        showLogin();
+    }
+
+    // Login form handler.
+    const loginForm = document.querySelector(SEL.loginForm);
+    if (loginForm) loginForm.addEventListener('submit', handleLogin);
+
     // Screen viewer
     const canvas = document.querySelector(SEL.canvas);
     if (canvas) {
@@ -207,9 +366,9 @@ function init() {
         });
     }
 
-    // Agent polling
+    // Agent polling (only when authenticated).
     agents.on('agents:changed', renderAgents);
-    agents.startPolling();
+    if (isAuthenticated()) agents.startPolling();
 
     // Global event delegation (replaces inline onclick handlers)
     document.addEventListener('click', handleGlobalClick);

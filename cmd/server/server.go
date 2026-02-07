@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"crypto/rand"
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
@@ -14,14 +14,16 @@ import (
 	"time"
 
 	"github.com/avaropoint/rmm/internal/protocol"
+	"github.com/avaropoint/rmm/internal/security"
+	"github.com/avaropoint/rmm/internal/store"
 )
 
 // registrationTimeout is how long the server waits for the agent's
 // initial registration message after the WebSocket handshake.
 const registrationTimeout = 30 * time.Second
 
-// Agent represents a connected remote agent.
-type Agent struct {
+// LiveAgent represents an active agent connection (in-memory).
+type LiveAgent struct {
 	ID            string                 `json:"id"`
 	Name          string                 `json:"name"`
 	Hostname      string                 `json:"hostname"`
@@ -42,24 +44,31 @@ type Agent struct {
 	Username      string                 `json:"username"`
 	UptimeSeconds int64                  `json:"uptime_seconds"`
 	AgentVersion  string                 `json:"agent_version"`
+	EnrolledAt    time.Time              `json:"enrolled_at,omitempty"`
 	conn          net.Conn
 	mu            sync.Mutex
 }
 
-// Server manages agents and viewers.
+// Server manages agents, viewers, and platform state.
 type Server struct {
-	agents  map[string]*Agent
-	viewers map[string]net.Conn
-	mu      sync.RWMutex
-	webDir  string
+	agents   map[string]*LiveAgent
+	viewers  map[string]net.Conn
+	mu       sync.RWMutex
+	webDir   string
+	store    store.Store
+	platform *security.Platform
+	tlsPaths *security.TLSConfig
 }
 
 // NewServer creates a new Server instance.
-func NewServer(webDir string) *Server {
+func NewServer(webDir string, db store.Store, platform *security.Platform, tlsPaths *security.TLSConfig) *Server {
 	return &Server{
-		agents:  make(map[string]*Agent),
-		viewers: make(map[string]net.Conn),
-		webDir:  webDir,
+		agents:   make(map[string]*LiveAgent),
+		viewers:  make(map[string]net.Conn),
+		webDir:   webDir,
+		store:    db,
+		platform: platform,
+		tlsPaths: tlsPaths,
 	}
 }
 
@@ -101,14 +110,8 @@ func upgradeWebSocket(w http.ResponseWriter, r *http.Request) (net.Conn, error) 
 	return conn, nil
 }
 
-// generateID returns a random hex string.
-func generateID() string {
-	b := make([]byte, 8)
-	rand.Read(b) //nolint:errcheck
-	return fmt.Sprintf("%x", b)
-}
-
 // handleAgent manages the lifecycle of an agent connection.
+// Agents must present a valid credential in their registration message.
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgradeWebSocket(w, r)
 	if err != nil {
@@ -139,13 +142,36 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verify agent credential.
+	if reg.Credential == "" {
+		log.Printf("Agent rejected: no credential provided")
+		_ = conn.Close()
+		return
+	}
+
+	agentID, err := s.platform.VerifyCredential(reg.Credential)
+	if err != nil {
+		log.Printf("Agent rejected: invalid credential: %v", err)
+		_ = conn.Close()
+		return
+	}
+
+	// Confirm agent exists in enrollment database.
+	credHash := security.CredentialHash(reg.Credential)
+	enrolled, err := s.store.GetAgentByCredential(context.Background(), credHash)
+	if err != nil || enrolled == nil {
+		log.Printf("Agent rejected: not enrolled (id=%s)", agentID)
+		_ = conn.Close()
+		return
+	}
+
 	displayCount := reg.DisplayCount
 	if displayCount < 1 {
 		displayCount = 1
 	}
 
-	agent := &Agent{
-		ID:            generateID(),
+	agent := &LiveAgent{
+		ID:            enrolled.ID,
 		Name:          reg.Name,
 		Hostname:      reg.Hostname,
 		OS:            reg.OS,
@@ -165,6 +191,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		Username:      reg.Username,
 		UptimeSeconds: reg.UptimeSeconds,
 		AgentVersion:  reg.AgentVersion,
+		EnrolledAt:    enrolled.EnrolledAt,
 		conn:          conn,
 	}
 
@@ -174,7 +201,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Agent registered: %s (%s) - %s/%s", agent.Name, agent.ID, agent.OS, agent.Arch)
 
-	respPayload, _ := json.Marshal(map[string]string{"id": agent.ID})
+	respPayload, _ := json.Marshal(map[string]string{"id": enrolled.ID})
 	resp, _ := json.Marshal(protocol.Message{
 		Type:    "registered",
 		Payload: respPayload,
@@ -187,6 +214,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		delete(s.agents, agent.ID)
 		s.mu.Unlock()
 		_ = conn.Close()
+		_ = s.store.UpdateAgentSeen(context.Background(), agent.ID, time.Now())
 		log.Printf("Agent disconnected: %s", agent.Name)
 	}()
 
@@ -233,7 +261,21 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleViewer manages the lifecycle of a viewer connection.
+// Requires valid API key via "token" query parameter.
 func (s *Server) handleViewer(w http.ResponseWriter, r *http.Request) {
+	// Authenticate viewer.
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	keyHash := security.HashAPIKey(token)
+	apiKey, err := s.store.VerifyAPIKey(context.Background(), keyHash)
+	if err != nil || apiKey == nil {
+		http.Error(w, "invalid API key", http.StatusUnauthorized)
+		return
+	}
+
 	agentID := r.URL.Query().Get("agent")
 	if agentID == "" {
 		http.Error(w, "agent parameter required", http.StatusBadRequest)
@@ -312,12 +354,11 @@ func (s *Server) handleViewer(w http.ResponseWriter, r *http.Request) {
 // handleListAgents returns a JSON list of all connected agents.
 func (s *Server) handleListAgents(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	s.mu.RLock()
-	agents := make([]Agent, 0, len(s.agents))
+	agents := make([]LiveAgent, 0, len(s.agents))
 	for _, a := range s.agents {
-		agents = append(agents, Agent{
+		agents = append(agents, LiveAgent{
 			ID:            a.ID,
 			Name:          a.Name,
 			Hostname:      a.Hostname,
@@ -338,9 +379,190 @@ func (s *Server) handleListAgents(w http.ResponseWriter, _ *http.Request) {
 			Username:      a.Username,
 			UptimeSeconds: a.UptimeSeconds,
 			AgentVersion:  a.AgentVersion,
+			EnrolledAt:    a.EnrolledAt,
 		})
 	}
 	s.mu.RUnlock()
 
 	json.NewEncoder(w).Encode(agents) //nolint:errcheck
+}
+
+// handleEnroll processes agent enrollment requests.
+// Agents POST with an enrollment code and receive credentials in return.
+func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Code     string `json:"code"`
+		Name     string `json:"name"`
+		Hostname string `json:"hostname"`
+		OS       string `json:"os"`
+		Arch     string `json:"arch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.Code == "" {
+		http.Error(w, `{"error":"enrollment code required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Verify enrollment token.
+	codeHash := security.HashEnrollmentCode(req.Code)
+	agentID := security.HashAPIKey(req.Code + s.platform.Fingerprint())[:16]
+
+	token, err := s.store.ConsumeEnrollmentToken(context.Background(), codeHash, agentID)
+	if err != nil {
+		log.Printf("Enrollment failed: %v", err)
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusForbidden)
+		return
+	}
+	if token == nil {
+		http.Error(w, `{"error":"invalid enrollment code"}`, http.StatusForbidden)
+		return
+	}
+
+	// Generate agent credential.
+	credential := s.platform.SignCredential(agentID)
+	credHash := security.CredentialHash(credential)
+
+	// Store enrolled agent.
+	now := time.Now()
+	agentRec := &store.AgentRecord{
+		ID:             agentID,
+		Name:           req.Name,
+		Hostname:       req.Hostname,
+		OS:             req.OS,
+		Arch:           req.Arch,
+		CredentialHash: credHash,
+		EnrolledAt:     now,
+		LastSeen:       now,
+	}
+	if err := s.store.CreateAgent(context.Background(), agentRec); err != nil {
+		log.Printf("Failed to store agent: %v", err)
+		http.Error(w, `{"error":"enrollment failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Agent enrolled: %s (%s) via %s token", req.Name, agentID, token.Type)
+
+	// Read CA cert for agent trust store.
+	var caCert string
+	if s.tlsPaths != nil {
+		if data, err := security.ReadCACert(s.tlsPaths); err == nil {
+			caCert = string(data)
+		}
+	}
+
+	resp := map[string]string{
+		"agent_id":             agentID,
+		"credential":           credential,
+		"platform_fingerprint": s.platform.Fingerprint(),
+	}
+	if caCert != "" {
+		resp["ca_certificate"] = caCert
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// handleEnrollmentTokens manages enrollment tokens (CRUD).
+func (s *Server) handleEnrollmentTokens(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		tokens, err := s.store.ListEnrollmentTokens(context.Background())
+		if err != nil {
+			http.Error(w, `{"error":"failed to list tokens"}`, http.StatusInternalServerError)
+			return
+		}
+		if tokens == nil {
+			tokens = []*store.EnrollmentToken{}
+		}
+		json.NewEncoder(w).Encode(tokens) //nolint:errcheck
+
+	case http.MethodPost:
+		var req struct {
+			Type  string `json:"type"`
+			Label string `json:"label"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+			return
+		}
+		if req.Type == "" {
+			req.Type = "attended"
+		}
+
+		token, code, err := security.GenerateEnrollmentToken(req.Type, req.Label)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		if err := s.store.CreateEnrollmentToken(context.Background(), token); err != nil {
+			http.Error(w, `{"error":"failed to create token"}`, http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("Enrollment token created: %s (%s)", token.ID, req.Type)
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"id":         token.ID,
+			"code":       code,
+			"type":       token.Type,
+			"label":      token.Label,
+			"expires_at": token.ExpiresAt,
+		})
+
+	case http.MethodDelete:
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			http.Error(w, `{"error":"id required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := s.store.DeleteEnrollmentToken(context.Background(), id); err != nil {
+			http.Error(w, `{"error":"failed to delete"}`, http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"}) //nolint:errcheck
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAuthVerify validates an API key.
+func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
+		http.Error(w, `{"error":"key required"}`, http.StatusBadRequest)
+		return
+	}
+
+	keyHash := security.HashAPIKey(req.Key)
+	apiKey, err := s.store.VerifyAPIKey(context.Background(), keyHash)
+	if err != nil || apiKey == nil {
+		http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+		"valid":    true,
+		"name":     apiKey.Name,
+		"platform": s.platform.Fingerprint(),
+	})
 }
